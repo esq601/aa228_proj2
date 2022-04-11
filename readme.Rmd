@@ -1,0 +1,399 @@
+---
+title: "Project 2- Reinforcement Learning"
+author: "Marc Eskew"
+date: "11/5/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+
+```
+
+## Summary
+
+### Background
+The goal of this project was to find the best possible policy for three separate datasets.  Each one of these sets contained four variables, $\{s,a,r,sp\}$ corresponding with initial state, action taken, reward, and $s'$ (next state).  Using any of the techniques taught in the class, we were to develop a policy for each state (both given and not included in the datasets) that would maximize the utility function.
+
+### Technique
+
+I utilized two techniques, value iteration and Q-learning, to develop my policies.  As I was developing and experimenting with each method, I learned that there was benefits and challenges to applying a particular method to each of the datasets.  The value iteration approach worked well in all cases and Q-learning was definitely interesting to see it improver the Q values itereatively.
+
+
+```{r table, echo = FALSE}
+
+df <- tibble(
+  Problem = c("Small","Medium","Large"),
+  States = c(100, 50000, 312020),
+  Actions = c(4,7,9),
+  Method = c("Value Iter.","Q-Learning","Value Iter.+Structure"),
+  Time = c("~15 minutes","~7 hours", "~3 hours")
+)
+
+knitr::kable(df)
+
+```
+
+### Small Dataset
+
+This dataset was solved directly with value iteration.  More specifically, I utilized *Asynchronous Value Iteration*.  With a relatively small number of states and actions, the training was not particularly computationally expensive.  Once I validated that my algorithm was working correctly, I was able to iterate through 10 passes in the state space before the result was at a point where I was comfortable with the policy.
+
+### Medium Dataset
+
+Initially, with a small estimate of success probability, I attempted to run the value iteration algorithm to the medium dataset.  As expected, the computational time was excessive.  I decided to attempt a *Q-Learning* algorithm to improve the learning efficiency.  With the uncertainty in the problem's model, using Q-learning seemed like an efficient way to navigate the uncertainty and determine a policy.
+
+The Q-learning algorithm I developed was successful in determining an improved policy for the dataset, however, it was not as efficient as I had hoped.  I had to run the algorithm for approximately 7 hours until there was minimal improvement in the policy.  I did not set any exit conditions to the training process, so could have potentially terminated early with minimal loss.
+
+Additionally, there was a significant amount of missing states from the medium dataset.  This made assigning a policy to these states inexact as I was not able to explore the the Q-learning algorithm.  What I did to accomplish this was use the discovered $Q(s,a)$ from from the Q-learning and make a prediction on $Q(s,a)$ for unknown states.  I utilized a random forest regression model to generate the predicted Q values for missing states.
+
+### Large Dataset
+
+For the large dataset, I intially ran Q-learning.  However, due to the structure of the data it was not finding a solution efficiently.  I then sampled the available states in the dataset (100,000 rows, 500 distinct states) and applied *Value Iteration and Structure Exploration* to determine the optimal policy for the provided states.
+
+The structure of the data showed signs that the first two digits represent some sort of positional value separate from the final four digits.  The last digit and 3rd from last took on values $1:4$ while the 2nd and 4th from last took on $0:2$.  Certain operations adjusted the second sets of values and others transitioned between 'levels' when the position was some combination of '01' and '20.  At those values, the action taken was $5:9$.  In all other states where it was not in a top level transitory state, actions $1:4$ produced state transitons along the last for digits of the state value.  
+
+While the value iteration developed a good solution for the limited number of states available, I wasn't able to develop a method to apply the solution generally to the full state space of 312,020 states.  I found that most of the non-"transition" actions 
+
+
+### Summary
+
+While my implementations worked well on the small and medium dataset, I was not able to develop a great solution for the large dataset.  Several of the R packages I utilized for some convenience functions are not extremely fast.  I think these functions dramatically slowed down the training process when iterating.  I chose to use R because I am most familiar with this language and thought it would be interesting to do it in something different than what most people were doing.  There are some improvements that I could implement in the R code or transition to Python to improve performance.  Despite these issues, my policies are better than random and the algorithms I implemented were mostly effective with the given data.
+
+## Code
+
+### Value Iteration
+
+You can also embed plots, for example:
+
+```{r value_iteration, eval=FALSE}
+value_iter <- function(iters, util, reward, policy, trans, disc) {
+  
+  policy_update <- policy
+  
+  
+  for(i in seq(1:iters)) {
+    
+    for(state in policy_update$s){
+      
+      action <- bellman(state, util, trans, policy, disc, reward)
+      policy_update <- policy_update %>%
+        mutate(a = ifelse(s==state,action,a))
+    }
+  }
+  policy_update
+}
+```
+
+```{r bellman, eval = FALSE}
+bellman <- function(state,util, trans, policy, disc, reward) {
+  
+  util_update <- util
+  
+  t <- trans %>%
+    filter(s == state)
+  
+  p <- policy %>%
+    filter(s == state)
+  
+  max_a <- 0
+  
+  a_new <- p$a
+  
+  for(actions in unique(t$a)) {
+    
+    rew_new <- reward %>%
+      ungroup() %>%
+      filter(s == state, a == actions)
+    
+    r_val <- rew_new[[3]]
+    
+    sum_total <- 0
+    
+    trans_new <- trans %>%
+      filter(s == state,a == actions)
+    
+    
+    for(state_new in trans_new$sp) {
+      t <- trans %>%
+        filter(s == state, sp == state_new, a == actions)
+      
+      t_val = t$prob
+      
+      util_prev <- util_update %>%
+        filter(s == state_new)
+      
+      util_p_val <- util_prev[[2]]
+      
+      sum_total <- max(sum_total) + (max(util_p_val) * t_val) 
+    }
+    
+    util_new <- max(r_val) + disc * max(sum_total)
+    if(util_new > max_a) {
+
+      a_new <- actions
+      max_a <- util_new
+    }
+  }
+  a_new
+}
+```
+
+
+```{r policy_eval, eval=FALSE}
+policy_eval <- function(iters, reward, policy, trans, disc) {
+  
+  util_init <- reward %>%
+    left_join(policy, by = "s") %>%
+    filter(`a.x` == `a.y`) %>%
+    select(s, u = r)
+  
+  util <- util_init
+  
+  for(i in seq(1:iters)) {
+    
+    util <- lookahead(util,trans,policy,disc,rew)
+    
+  }
+  
+  util
+}
+```
+
+```{r q_learn, eval = FALSE}
+
+q_learn <- function(q_dt,state,action,next_states,reward,disc,learn) {
+
+    r <- reward %>%
+    filter(s == state, a == action)
+  
+  q_dt_curr <- q_dt[states == state & actions == action,q]
+  
+  r <- r$r
+  len_next <- nrow(next_states)
+  
+  if(len_next > 0){
+    max_q_next <- -100000
+    
+      for(j in 1:nrow(next_states)){
+        next_temp <- next_states[j,]
+        q_dt_next <- q_dt[states == next_temp$s & actions == next_temp$a,q] 
+        if(q_dt_next > max_q_next) {
+          
+          max_q_next <- q_dt_next
+          
+        }
+    }
+    q_update <- q_dt_curr + learn*(r + disc* max_q_next - q_dt_curr)
+    q_dt[states == state & actions == action, q:=q_update]
+  }
+}
+```
+
+```{r simulate, eval = FALSE}
+simulate <- function(data,policy,reward,state,trans,h,eps,alpha){
+
+  state_val <- state
+  for (i in 1:h) {
+    
+    if(i %% 50 == 0) {
+      print(paste("Step",i))
+    }
+    
+    rand_num <- runif(1)
+    eps <- alpha*eps
+    
+    if(eps > rand_num) {
+      action_space <- data %>%
+        filter(s==state_val) 
+    } else {
+      action_space <- data %>%
+        filter(s==state_val) %>%
+        filter(r == max(r))
+    }
+    
+    for(k in unique(action_space$a)) {
+      next_states <- data[s %in% action_space$sp & a == k]
+      
+      try(
+      q_learn(q_dt,state_val,k,next_states,reward,disc,0.2)
+      )
+    }
+    
+    action_space <- action_space %>%
+      sample_n(1)
+
+    action <- action_space$a
+    
+    new_state <- data %>%
+      filter(a == action, s == state_val) %>%
+      ungroup() %>%
+      sample_n(1)
+    if(new_state$r > 75000){
+      q_dt[states == state_val & actions == action, q:=new_state$r]
+      break
+    }
+    
+    state_val <- new_state$sp
+  }
+}
+```
+
+```{r small_implement, eval = FALSE}
+
+source("funcs.R")
+
+small <- readr::read_csv("https://raw.githubusercontent.com/sisl/AA228-CS238-Student/master/project2/data/small.csv")
+
+trans <- small %>%
+  group_by(s,a,sp) %>%
+  summarise(num = n()) %>%
+  group_by(s,a) %>%
+  mutate(prob = num/sum(num)) %>%
+  select(s,sp,a,prob)
+
+rew <- small %>%
+  group_by(s,a,r) %>%
+  summarise(num = n()) %>%
+  select(s,a,r)
+
+policy <- tibble(s = unique(small$s), a = rep(2,100))
+
+util_init <- rew %>%
+  left_join(policy, by = "s") %>%
+  filter(`a.x` == `a.y`) %>%
+  select(s, u = r)
+
+
+disc <- 0.95
+
+policy <- value_iter(10,util_init,rew,policy,trans,disc)
+
+submit <- policy %>%
+  arrange(s)
+
+readr::write_lines(submit$a, file = "small.policy")
+
+
+```
+
+```{r med_implement, eval = FALSE}
+med_full <- readr::read_csv("https://raw.githubusercontent.com/sisl/AA228-CS238-Student/master/project2/data/medium.csv")
+
+
+states <- unique(medium_full$s)
+actions <- unique(medium_full$a)
+
+q <- expand_grid(states,actions) %>%
+  mutate(q = 0)
+
+q_dt <- as.data.table(q)
+
+for(i in 1:100000) {
+  if(i %% 500 == 0){
+    print(i)
+    print(q_dt %>%
+            mutate(eval = ifelse(q==0,"Zero","Non-Zero")) %>%
+            group_by(eval) %>%
+            summarise(num = n()))
+    write.csv(q_dt,file = "q_med_new2.csv")
+  }
+  state_sel <- sample(states,1)
+  action_sel <- sample(actions,1)
+  
+  next_states <-med_full[s %in% state_sel & a == action_sel]
+  q_learn(q_dt,state_sel,action_sel,next_states,rew,disc,0.2)
+}
+```
+
+````{r large_implement, eval = FALSE}
+large <- readr::read_csv("https://raw.githubusercontent.com/sisl/AA228-CS238-Student/master/project2/data/large.csv")
+
+
+trans <- large %>%
+  group_by(s,a,sp) %>%
+  summarise(num = n()) %>%
+  group_by(s,a) %>%
+  mutate(prob = num/sum(num)) %>%
+  select(s,sp,a,prob)
+
+rew <- large %>%
+  group_by(s,a,r) %>%
+  summarise(num = n()) %>%
+  select(s,a,r)
+
+policy <- tibble(s = unique(large$s), a = rep(4,length(unique(large$s))))
+
+util_init <- rew %>%
+  left_join(policy, by = "s") %>%
+  filter(`a.x` == `a.y`) %>%
+  select(s, u = r)
+
+
+disc <- 0.95
+
+df <- policy_eval(10, rew, policy, trans, disc)
+
+df_norm <- df %>%
+  ungroup() %>%
+  mutate(x = (s-1)%%10, y = ceiling(s/10))
+
+
+ggplot(df_norm, aes(x = x, y = y)) +
+  geom_tile(aes(fill = u), color = "black") +
+  geom_text(aes(label = s))
+
+large_val <- value_iter(20,util_init,rew,test,trans,disc)
+
+
+lv1 <- large_val %>%
+  mutate(l1 = str_sub(s,1,2),
+         l2 = str_sub(s,3,4),
+         l3 = str_sub(s,5,6))
+
+
+lv2 <- lv1 %>%
+  filter(l1 == 15)
+
+
+policy_rf <- tibble(s=seq(1:312020)) %>%
+  mutate(s_update = str_pad(s, 6, pad = "0")) %>%
+  mutate(l1 = str_sub(s_update,1,2),
+         l2 = str_sub(s_update,3,4),
+         l3 = str_sub(s_update,5,6)) %>%
+  left_join(lv2, by = c("l2","l3")) %>%
+  mutate(a = factor(a))
+
+
+
+policy_filled <- policy_rf %>%
+  filter(is.na(a) == F) %>%
+  select(l2,l3,l1=l1.x,a)
+
+
+model <- randomForest(policy_filled[-3:-4],policy_filled[[4]], ntree = 500)
+
+policy_unfilled <- policy_knn %>%
+  filter(is.na(a) == T) %>%
+  select(l2,l3,l1=l1.x,a)
+
+preds <- predict(model, newdata = policy_unfilled[-3:-4])
+
+
+policy_unfilled$a <- preds
+
+submit <- bind_rows(policy_unfilled,policy_filled) %>%
+  mutate(s = paste0(l1,l2,l3)) %>%
+  arrange(s) %>%
+  filter(is.na(a) == FALSE) %>%
+  select(s,a)
+
+
+submit <- policy_knn %>%
+  select(s.x,a_new) %>%
+  arrange(s.x)
+
+
+```
+
